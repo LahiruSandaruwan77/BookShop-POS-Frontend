@@ -1,0 +1,22 @@
+# Dependencies (regenerated with npm install)
+node_modules/
+
+# Build output
+dist/
+.vite/
+
+# Environment files (in case you add any secrets later)
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
