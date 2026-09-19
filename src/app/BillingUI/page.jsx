@@ -6,6 +6,57 @@ import { useAuth } from "../../lib/auth-context";
 const rs = (n) =>
   "Rs. " + Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Printed on every receipt — edit here, nothing else to touch.
+const SHOP = {
+  name: "SARASAVI BOOK CORNER",
+  address: "Kandy",
+  phone: "081-2223550",
+};
+
+// Print CSS lives here rather than in a shared stylesheet since only this
+// screen prints. The narrow width/monospace font are deliberate: this is the
+// same layout an 80mm thermal roll will get later, just rendered by the
+// browser today instead of ESC/POS commands.
+const PRINT_STYLES = `
+  .receipt-print { display: none; }
+
+  @media print {
+    /* The app's dark theme sets body's background directly (not just a
+       descendant's), so body * { visibility: hidden } alone leaves it
+       painted behind the receipt — force paper-white explicitly. */
+    html, body { background: #fff !important; }
+    body * { visibility: hidden; }
+    .receipt-print, .receipt-print * { visibility: visible; }
+    .receipt-print {
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 72mm; /* ~300px / 42-48 monospace chars — an 80mm roll's usable width */
+      background: #fff;
+      font-family: "JetBrains Mono", "Courier New", monospace;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #000;
+    }
+  }
+
+  /* @page is inherently print-only, so it's kept at the top level rather than
+     nested inside @media print — some print/PDF engines don't honor it there. */
+  @page {
+    size: 80mm auto; /* narrow roll width, auto (unbounded) height — not A4 */
+    margin: 4mm 3mm;
+  }
+
+  .receipt-print .center { text-align: center; }
+  .receipt-print .bold { font-weight: bold; }
+  .receipt-print .shop-name { font-weight: bold; font-size: 14px; letter-spacing: 0.5px; }
+  .receipt-print .divider { border-top: 1px dashed #000; margin: 6px 0; }
+  .receipt-print .row { display: flex; justify-content: space-between; gap: 8px; }
+  .receipt-print .item-name { margin-bottom: 1px; }
+  .receipt-print .footer { margin-top: 10px; }
+`;
+
 // Backend field names -> the shape this screen was written against.
 const mapProduct = (p) => ({
   id: p.id,
@@ -13,8 +64,14 @@ const mapProduct = (p) => ({
   name: p.name,
   price: Number(p.sellingPrice),
   isService: p.service,
+  isOpenPrice: p.openPrice,
   stock: p.stockQty === null || p.stockQty === undefined ? null : Number(p.stockQty),
 });
+
+// Open-price lines carry their own enteredPrice; everything else uses the
+// catalog price. Falls back to product.price for saleDone's server-resolved
+// lines too, since those never carry isOpenPrice — the server already priced them.
+const linePrice = (l) => (l.product.isOpenPrice ? l.enteredPrice : l.product.price);
 
 export default function BillingScreen() {
   const { user, logout } = useAuth();
@@ -26,7 +83,11 @@ export default function BillingScreen() {
   const [flash, setFlash] = useState(null); // { type: 'ok'|'err', text }
   const [saleDone, setSaleDone] = useState(null); // completed sale snapshot
   const [checkingOut, setCheckingOut] = useState(false);
+  const [pendingOpenPrice, setPendingOpenPrice] = useState(null); // product awaiting a cashier-entered price
+  const [priceInput, setPriceInput] = useState("");
   const scanRef = useRef(null);
+  const priceInputRef = useRef(null);
+  const nextLineId = useRef(1); // cart lines need their own identity — see addToCart
 
   const notify = (type, text) => {
     setFlash({ type, text });
@@ -51,29 +112,59 @@ export default function BillingScreen() {
     scanRef.current?.focus();
   }, [cart, saleDone]);
 
-  const addToCart = (product, qty = 1) => {
+  // Focus the price prompt's input the moment it mounts, same pattern as scanRef above.
+  useEffect(() => {
+    if (pendingOpenPrice) priceInputRef.current?.focus();
+  }, [pendingOpenPrice]);
+
+  // Open-price items have no fixed price, so adding one first opens the price
+  // prompt (see below) instead of going straight into the cart; enteredPrice
+  // arrives once the cashier confirms it there.
+  const addToCart = (product, qty = 1, enteredPrice = null) => {
+    if (product.isOpenPrice && enteredPrice === null) {
+      setPendingOpenPrice(product);
+      setQuery("");
+      return;
+    }
     setCart((prev) => {
-      const line = prev.find((l) => l.product.id === product.id);
-      if (line) {
-        return prev.map((l) =>
-          l.product.id === product.id ? { ...l, qty: l.qty + qty } : l
-        );
+      // Normal/service lines merge by product; open-price lines never do — each
+      // add is its own pricing decision, so it always gets its own line.
+      if (!product.isOpenPrice) {
+        const line = prev.find((l) => l.product.id === product.id);
+        if (line) {
+          return prev.map((l) =>
+            l.product.id === product.id ? { ...l, qty: l.qty + qty } : l
+          );
+        }
       }
-      return [...prev, { product, qty }];
+      return [...prev, { lineId: nextLineId.current++, product, qty, enteredPrice }];
     });
     notify("ok", `Added: ${product.name}`);
     setQuery("");
   };
 
-  const setQty = (id, qty) => {
+  const confirmOpenPrice = () => {
+    const price = parseFloat(priceInput);
+    if (!price || price <= 0) return notify("err", "Enter a valid price");
+    addToCart(pendingOpenPrice, 1, price);
+    setPendingOpenPrice(null);
+    setPriceInput("");
+  };
+
+  const cancelOpenPrice = () => {
+    setPendingOpenPrice(null);
+    setPriceInput("");
+  };
+
+  const setQty = (lineId, qty) => {
     if (Number.isNaN(qty) || qty < 1) return;
     setCart((prev) =>
-      prev.map((l) => (l.product.id === id ? { ...l, qty } : l))
+      prev.map((l) => (l.lineId === lineId ? { ...l, qty } : l))
     );
   };
 
-  const removeLine = (id) =>
-    setCart((prev) => prev.filter((l) => l.product.id !== id));
+  const removeLine = (lineId) =>
+    setCart((prev) => prev.filter((l) => l.lineId !== lineId));
 
   // Enter in the scan box: exact barcode match first (scanner path), else first search hit.
   const handleScanSubmit = () => {
@@ -95,7 +186,7 @@ export default function BillingScreen() {
       : [];
 
   const services = catalog.filter((p) => p.isService);
-  const total = cart.reduce((s, l) => s + l.product.price * l.qty, 0);
+  const total = cart.reduce((s, l) => s + linePrice(l) * l.qty, 0);
   const paid = parseFloat(tendered) || 0;
   const change = paid - total;
   const canComplete = cart.length > 0 && paid >= total && !checkingOut;
@@ -104,7 +195,13 @@ export default function BillingScreen() {
     setCheckingOut(true);
     try {
       const res = await salesApi.checkout({
-        items: cart.map((l) => ({ productId: l.product.id, quantity: l.qty })),
+        items: cart.map((l) => ({
+          productId: l.product.id,
+          quantity: l.qty,
+          // Only open-price lines send a price — normal/service lines never do,
+          // the server always prices those from the product record itself.
+          ...(l.product.isOpenPrice ? { unitPrice: l.enteredPrice } : {}),
+        })),
         paidAmount: paid,
         paymentMethod: "CASH",
       });
@@ -112,6 +209,7 @@ export default function BillingScreen() {
         no: res.id,
         time: new Date(res.saleTime),
         lines: res.items.map((line, i) => ({
+          lineId: i,
           product: { id: i, name: line.name, price: Number(line.unitPrice) },
           qty: Number(line.quantity),
         })),
@@ -133,6 +231,50 @@ export default function BillingScreen() {
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
+      <style>{PRINT_STYLES}</style>
+
+      {/* Print-only receipt for the completed sale — invisible on screen, and the
+          only thing `body * { visibility: hidden }` leaves visible when printing. */}
+      {saleDone && (
+        <div className="receipt-print">
+          <div className="center shop-name">{SHOP.name}</div>
+          <div className="center">{SHOP.address}</div>
+          <div className="center">Tel {SHOP.phone}</div>
+
+          <div className="divider" />
+          <div>Bill #{saleDone.no}</div>
+          <div>{saleDone.time.toLocaleString()}</div>
+
+          <div className="divider" />
+          {saleDone.lines.map((l) => (
+            <div key={l.product.id} className="item-name">
+              <div>{l.product.name}</div>
+              <div className="row">
+                <span>{l.qty} x {l.product.price.toFixed(2)}</span>
+                <span>{(l.product.price * l.qty).toFixed(2)}</span>
+              </div>
+            </div>
+          ))}
+
+          <div className="divider" />
+          <div className="row bold">
+            <span>TOTAL</span>
+            <span>{rs(saleDone.total)}</span>
+          </div>
+          <div className="row">
+            <span>Cash</span>
+            <span>{rs(saleDone.paid)}</span>
+          </div>
+          <div className="row">
+            <span>Change</span>
+            <span>{rs(saleDone.change)}</span>
+          </div>
+
+          <div className="divider" />
+          <div className="center footer">Thank you — come again!</div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-zinc-900 border-b border-zinc-800 px-5 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
@@ -199,7 +341,9 @@ export default function BillingScreen() {
                           <span className="ml-2 text-xs text-zinc-500">↵ Enter</span>
                         )}
                       </span>
-                      <span className="tabular-nums text-zinc-400">{rs(p.price)}</span>
+                      <span className="tabular-nums text-zinc-400">
+                        {p.isOpenPrice ? <span className="text-sky-400">enter price</span> : rs(p.price)}
+                      </span>
                     </button>
                   </li>
                 ))}
@@ -246,7 +390,7 @@ export default function BillingScreen() {
                 </thead>
                 <tbody>
                   {cart.map((l) => (
-                    <tr key={l.product.id} className="border-t border-zinc-800/60 hover:bg-zinc-800/20 transition-colors">
+                    <tr key={l.lineId} className="border-t border-zinc-800/60 hover:bg-zinc-800/20 transition-colors">
                       <td className="px-4 py-2 text-zinc-100">
                         {l.product.name}
                         {l.product.isService && (
@@ -254,11 +398,16 @@ export default function BillingScreen() {
                             service
                           </span>
                         )}
+                        {l.product.isOpenPrice && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wide bg-sky-500/10 text-sky-400 border border-sky-500/25 px-1.5 py-0.5 rounded">
+                            open price
+                          </span>
+                        )}
                       </td>
                       <td className="px-2 py-1 text-center">
                         <div className="inline-flex items-center gap-1">
                           <button
-                            onClick={() => setQty(l.product.id, l.qty - 1)}
+                            onClick={() => setQty(l.lineId, l.qty - 1)}
                             className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold transition-colors"
                           >
                             −
@@ -267,11 +416,11 @@ export default function BillingScreen() {
                             type="number"
                             min="1"
                             value={l.qty}
-                            onChange={(e) => setQty(l.product.id, parseInt(e.target.value, 10))}
+                            onChange={(e) => setQty(l.lineId, parseInt(e.target.value, 10))}
                             className="w-14 text-center bg-zinc-800/60 border border-zinc-700 rounded-md py-1 tabular-nums text-zinc-100 focus:border-emerald-500 focus:outline-none"
                           />
                           <button
-                            onClick={() => setQty(l.product.id, l.qty + 1)}
+                            onClick={() => setQty(l.lineId, l.qty + 1)}
                             className="w-7 h-7 rounded-md bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold transition-colors"
                           >
                             +
@@ -279,14 +428,14 @@ export default function BillingScreen() {
                         </div>
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums text-zinc-400">
-                        {rs(l.product.price)}
+                        {rs(linePrice(l))}
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums font-medium text-zinc-100">
-                        {rs(l.product.price * l.qty)}
+                        {rs(linePrice(l) * l.qty)}
                       </td>
                       <td className="pr-3 text-right">
                         <button
-                          onClick={() => removeLine(l.product.id)}
+                          onClick={() => removeLine(l.lineId)}
                           className="text-zinc-600 hover:text-red-400 text-lg leading-none transition-colors"
                           title="Remove line"
                         >
@@ -305,19 +454,19 @@ export default function BillingScreen() {
         <aside className="w-80 shrink-0 p-4 pl-0">
           <div className="h-full bg-neutral-50 rounded-lg shadow-2xl shadow-black/50 border border-neutral-200 flex flex-col font-mono text-sm text-neutral-900">
             <div className="px-5 pt-5 pb-3 text-center border-b border-dashed border-neutral-300">
-              <div className="font-bold tracking-wider">SARASAVI BOOK CORNER</div>
-              <div className="text-xs text-neutral-500">Kandy · Tel 081-22XXXXX</div>
+              <div className="font-bold tracking-wider">{SHOP.name}</div>
+              <div className="text-xs text-neutral-500">{SHOP.address} · Tel {SHOP.phone}</div>
             </div>
 
             <div className="flex-1 overflow-auto px-5 py-3 space-y-1">
               {(saleDone ? saleDone.lines : cart).map((l) => (
-                <div key={l.product.id} className="flex justify-between gap-2">
+                <div key={l.lineId} className="flex justify-between gap-2">
                   <span className="truncate">
                     {l.qty > 1 ? `${l.qty} × ` : ""}
                     {l.product.name}
                   </span>
                   <span className="tabular-nums shrink-0">
-                    {(l.product.price * l.qty).toFixed(2)}
+                    {(linePrice(l) * l.qty).toFixed(2)}
                   </span>
                 </div>
               ))}
@@ -345,12 +494,20 @@ export default function BillingScreen() {
                   <div className="text-center text-xs text-neutral-400 pt-1">
                     Bill #{saleDone.no} · {saleDone.time.toLocaleTimeString()}
                   </div>
-                  <button
-                    onClick={newSale}
-                    className="w-full mt-1 py-3 rounded-lg bg-zinc-900 text-white font-sans font-semibold hover:bg-zinc-800 transition-colors"
-                  >
-                    New sale (Enter)
-                  </button>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      onClick={() => window.print()}
+                      className="flex-1 py-3 rounded-lg bg-zinc-700 text-white font-sans font-semibold hover:bg-zinc-600 transition-colors"
+                    >
+                      Print receipt
+                    </button>
+                    <button
+                      onClick={newSale}
+                      className="flex-1 py-3 rounded-lg bg-zinc-900 text-white font-sans font-semibold hover:bg-zinc-800 transition-colors"
+                    >
+                      New sale (Enter)
+                    </button>
+                  </div>
                 </>
               ) : (
                 <>
@@ -388,6 +545,51 @@ export default function BillingScreen() {
           </div>
         </aside>
       </div>
+
+      {/* Open-price prompt: no fixed price to add at, so ask for one before the
+          item goes into the cart. Enter confirms, Escape cancels — this has to
+          be fast, it's a live counter interaction. */}
+      {pendingOpenPrice && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-30"
+          onClick={cancelOpenPrice}
+        >
+          <div
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl shadow-black/50 w-full max-w-xs p-5 space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-sm font-semibold text-zinc-50">{pendingOpenPrice.name}</div>
+            <label className="block">
+              <span className="text-xs font-medium text-zinc-400">Price for this sale</span>
+              <input
+                ref={priceInputRef}
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={priceInput}
+                onChange={(e) => setPriceInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmOpenPrice();
+                  if (e.key === "Escape") cancelOpenPrice();
+                }}
+                placeholder="0.00"
+                className="w-full mt-1.5 px-3 py-2 text-lg rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none tabular-nums transition-colors"
+              />
+            </label>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={confirmOpenPrice}
+                className="flex-1 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold transition-colors"
+              >
+                Add (Enter)
+              </button>
+              <button onClick={cancelOpenPrice} className="px-4 py-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
