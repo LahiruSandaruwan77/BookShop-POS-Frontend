@@ -59,11 +59,13 @@ export const products = {
 export const categories = {
   list: () => request("/api/categories"),
   create: (name) => request("/api/categories", { method: "POST", body: { name } }),
+  remove: (id) => request(`/api/categories/${id}`, { method: "DELETE" }),
 };
 
 export const sales = {
   checkout: (body) => request("/api/sales", { method: "POST", body }),
   get: (id) => request(`/api/sales/${id}`),
+  list: ({ from, to }) => request("/api/sales", { params: { from, to } }), // from/to = "yyyy-MM-dd"
 };
 
 export const stock = {
@@ -72,7 +74,9 @@ export const stock = {
 };
 
 export const reports = {
-  summary: (range) => request("/api/reports/summary", { params: { range } }),
+  today: () => request("/api/reports/today"),
+  week: () => request("/api/reports/week"),
+  day: (date) => request("/api/reports/day", { params: { date } }), // date = "yyyy-MM-dd"
 };
 
 export const users = {

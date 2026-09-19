@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { products as productsApi, categories as categoriesApi, stock as stockApi, users as usersApi, reports as reportsApi, ApiError } from "../../lib/api";
+import { products as productsApi, categories as categoriesApi, stock as stockApi, users as usersApi, reports as reportsApi, sales as salesApi, ApiError } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
 
 const rs = (n) => "Rs. " + Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2 });
@@ -10,6 +10,7 @@ const msg = (err, fallback) => (err instanceof ApiError ? err.message : fallback
 const EMPTY_FORM = {
   id: null, barcode: "", name: "", categoryId: "",
   costPrice: "", sellingPrice: "", openingStock: "", service: false,
+  openPrice: false, marginPercent: "",
 };
 
 export default function AdminScreen() {
@@ -66,6 +67,7 @@ export default function AdminScreen() {
             ["categories", "Categories"],
             ["users", "Users"],
             ["reports", "Reports"],
+            ["history", "Sales history"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -102,6 +104,7 @@ export default function AdminScreen() {
               )}
               {tab === "users" && <UsersTab notify={notify} currentUsername={user?.username} />}
               {tab === "reports" && <ReportsTab notify={notify} />}
+              {tab === "history" && <SalesHistoryTab notify={notify} />}
             </>
           )}
         </main>
@@ -120,6 +123,7 @@ export default function AdminScreen() {
 function ProductsTab({ products, categories, reloadProducts, notify }) {
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [form, setForm] = useState(null); // null = closed, object = editing/adding
   const [saving, setSaving] = useState(false);
   const barcodeRef = useRef(null);
@@ -133,7 +137,8 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
     (p) =>
       (showInactive || p.active) &&
       (p.name.toLowerCase().includes(search.toLowerCase()) ||
-        (p.barcode || "").includes(search))
+        (p.barcode || "").includes(search)) &&
+      (categoryFilter === "all" || p.category === categoryFilter)
   );
 
   const openAdd = () => setForm({ ...EMPTY_FORM, categoryId: categories[0]?.id ?? "" });
@@ -147,21 +152,31 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
       sellingPrice: p.sellingPrice,
       openingStock: "",
       service: p.service,
+      openPrice: p.openPrice,
+      marginPercent: p.marginPercent ?? "",
     });
 
   const save = async () => {
     if (!form.name.trim()) return notify("Name is required");
-    if (form.sellingPrice === "" || Number(form.sellingPrice) < 0) return notify("Selling price is required");
+    if (form.openPrice) {
+      if (form.marginPercent === "" || Number(form.marginPercent) < 0 || Number(form.marginPercent) > 100)
+        return notify("Profit margin must be between 0 and 100");
+    } else if (form.sellingPrice === "" || Number(form.sellingPrice) < 0) {
+      return notify("Selling price is required");
+    }
     if (!form.categoryId) return notify("Category is required");
 
+    const noStock = form.service || form.openPrice;
     const body = {
-      barcode: form.service ? null : form.barcode.trim() || null,
+      barcode: noStock ? null : form.barcode.trim() || null,
       name: form.name.trim(),
       categoryId: Number(form.categoryId),
-      costPrice: form.costPrice === "" ? 0 : Number(form.costPrice),
-      sellingPrice: Number(form.sellingPrice),
-      openingStock: form.service || form.id ? null : (form.openingStock === "" ? 0 : Number(form.openingStock)),
+      costPrice: form.openPrice ? 0 : (form.costPrice === "" ? 0 : Number(form.costPrice)),
+      sellingPrice: form.openPrice ? null : Number(form.sellingPrice),
+      openingStock: noStock || form.id ? null : (form.openingStock === "" ? 0 : Number(form.openingStock)),
       service: form.service,
+      openPrice: form.openPrice,
+      marginPercent: form.openPrice ? Number(form.marginPercent) : null,
       reorderLevel: null,
     };
 
@@ -195,6 +210,35 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
 
   return (
     <div className="max-w-5xl">
+      <div className="flex items-center gap-2 mb-3 text-sm flex-wrap">
+        <button
+          onClick={() => setCategoryFilter("all")}
+          className={`px-4 py-2 rounded-lg border font-medium transition-colors ${
+            categoryFilter === "all"
+              ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+              : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+          }`}
+        >
+          All
+        </button>
+        {categories.map((c) => (
+          <button
+            key={c.id}
+            onClick={() => setCategoryFilter(c.name)}
+            className={`px-4 py-2 rounded-lg border font-medium transition-colors ${
+              categoryFilter === c.name
+                ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+                : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            {c.name}
+          </button>
+        ))}
+        <span className="ml-auto text-xs text-zinc-500">
+          showing {visible.length} of {products.length}
+        </span>
+      </div>
+
       <div className="flex items-center gap-3 mb-4">
         <h1 className="text-xl font-semibold text-zinc-50 tracking-tight">Products</h1>
         <input
@@ -243,15 +287,22 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
                       service
                     </span>
                   )}
+                  {p.openPrice && (
+                    <span className="ml-2 text-[10px] uppercase tracking-wide bg-sky-500/10 text-sky-400 border border-sky-500/25 px-1.5 py-0.5 rounded">
+                      open price
+                    </span>
+                  )}
                 </td>
                 <td className="px-2 py-2.5 tabular-nums text-zinc-500">{p.barcode || "—"}</td>
                 <td className="px-2 py-2.5 text-zinc-400">{p.category}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums text-zinc-500">
-                  {p.service ? "—" : rs(p.costPrice)}
+                  {p.service || p.openPrice ? "—" : rs(p.costPrice)}
                 </td>
-                <td className="px-2 py-2.5 text-right tabular-nums font-medium text-zinc-100">{rs(p.sellingPrice)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums font-medium text-zinc-100">
+                  {p.openPrice ? `${p.marginPercent ?? 0}% margin` : rs(p.sellingPrice)}
+                </td>
                 <td className="px-2 py-2.5 text-right tabular-nums">
-                  {p.service ? (
+                  {p.service || p.openPrice ? (
                     "—"
                   ) : (
                     <span
@@ -300,13 +351,23 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
               <input
                 type="checkbox"
                 checked={form.service}
-                onChange={(e) => setForm({ ...form, service: e.target.checked })}
+                onChange={(e) => setForm({ ...form, service: e.target.checked, openPrice: e.target.checked ? false : form.openPrice })}
                 className="accent-amber-500"
               />
               This is a service (photocopy, printout…) — no barcode, no stock tracking
             </label>
 
-            {!form.service && (
+            <label className="flex items-center gap-2 text-sm bg-sky-500/10 border border-sky-500/25 rounded-lg px-3 py-2 text-sky-200">
+              <input
+                type="checkbox"
+                checked={form.openPrice}
+                onChange={(e) => setForm({ ...form, openPrice: e.target.checked, service: e.target.checked ? false : form.service })}
+                className="accent-sky-500"
+              />
+              This is open-price (loose toys, misc) — no barcode, no stock, cashier enters the price at billing
+            </label>
+
+            {!form.service && !form.openPrice && (
               <Field label="Barcode — click here and scan the item">
                 <input
                   ref={barcodeRef}
@@ -340,7 +401,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
-              {!form.service && (
+              {!form.service && !form.openPrice && (
                 <Field label="Cost price">
                   <input
                     type="number" min="0"
@@ -350,15 +411,27 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
                   />
                 </Field>
               )}
-              <Field label="Selling price *">
-                <input
-                  type="number" min="0"
-                  value={form.sellingPrice}
-                  onChange={(e) => setForm({ ...form, sellingPrice: e.target.value })}
-                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none tabular-nums transition-colors"
-                />
-              </Field>
-              {!form.service && !form.id && (
+              {form.openPrice ? (
+                <Field label="Profit margin % *">
+                  <input
+                    type="number" min="0" max="100"
+                    value={form.marginPercent}
+                    onChange={(e) => setForm({ ...form, marginPercent: e.target.value })}
+                    placeholder="e.g. 30"
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none tabular-nums transition-colors"
+                  />
+                </Field>
+              ) : (
+                <Field label="Selling price *">
+                  <input
+                    type="number" min="0"
+                    value={form.sellingPrice}
+                    onChange={(e) => setForm({ ...form, sellingPrice: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none tabular-nums transition-colors"
+                  />
+                </Field>
+              )}
+              {!form.service && !form.openPrice && !form.id && (
                 <Field label="Opening stock">
                   <input
                     type="number" min="0"
@@ -370,7 +443,13 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
               )}
             </div>
 
-            {form.id && !form.service && (
+            {form.openPrice && (
+              <p className="text-xs text-sky-300/80 bg-sky-500/5 border border-sky-500/20 rounded-lg px-3 py-2">
+                Margin is a percentage of the price the cashier enters at billing — not of cost. E.g. a 30% margin on a Rs. 100 sale means Rs. 30 profit, Rs. 70 cost.
+              </p>
+            )}
+
+            {form.id && !form.service && !form.openPrice && (
               <p className="text-xs text-zinc-400 bg-zinc-800/40 border border-zinc-800 rounded-lg px-3 py-2">
                 Stock is not edited here — use <b className="text-zinc-200">Receive stock</b> so every change is logged.
               </p>
@@ -586,6 +665,7 @@ function StockTab({ products, reloadProducts, notify }) {
 function CategoriesTab({ categories, reloadCategories, products, notify }) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
   const add = async () => {
     const n = name.trim();
@@ -600,6 +680,20 @@ function CategoriesTab({ categories, reloadCategories, products, notify }) {
       notify(msg(err, "Could not add category"));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const remove = async (c) => {
+    if (!window.confirm(`Delete category "${c.name}"? This can't be undone.`)) return;
+    setDeletingId(c.id);
+    try {
+      await categoriesApi.remove(c.id);
+      notify(`Deleted category: ${c.name}`);
+      reloadCategories();
+    } catch (err) {
+      notify(msg(err, "Could not delete category"));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -620,17 +714,30 @@ function CategoriesTab({ categories, reloadCategories, products, notify }) {
       </div>
       <ul className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 divide-y divide-zinc-800/60">
         {categories.map((c) => {
-          const count = products.filter((p) => p.category === c.name && p.active).length;
+          // Counts active AND inactive products — a soft-deleted product still
+          // references its category, and the backend blocks delete on either.
+          const count = products.filter((p) => p.category === c.name).length;
+          const canDelete = count === 0;
           return (
-            <li key={c.id} className="flex justify-between px-4 py-2.5 text-sm">
+            <li key={c.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
               <span className="text-zinc-100">{c.name}</span>
-              <span className="text-zinc-500">{count} item{count !== 1 ? "s" : ""}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-500">{count} item{count !== 1 ? "s" : ""}</span>
+                <button
+                  onClick={() => remove(c)}
+                  disabled={!canDelete || deletingId === c.id}
+                  title={canDelete ? "" : "Reassign or remove its products first"}
+                  className="text-zinc-500 hover:text-red-400 hover:underline transition-colors disabled:opacity-30 disabled:hover:text-zinc-500 disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  {deletingId === c.id ? "Deleting…" : "Delete"}
+                </button>
+              </div>
             </li>
           );
         })}
       </ul>
       <p className="text-xs text-zinc-600 mt-3">
-        Categories with products can't be deleted — deactivate the products first.
+        A category can only be deleted once no product — active or inactive — is assigned to it.
       </p>
     </div>
   );
@@ -910,35 +1017,77 @@ function UsersTab({ notify, currentUsername }) {
 }
 
 /* ---------------- Reports ---------------- */
+const dayLabel = (isoDate, opts) =>
+  new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-LK", opts);
+
 function ReportsTab({ notify }) {
-  const [range, setRange] = useState("today");
-  const [data, setData] = useState(null);
+  const [view, setView] = useState("today"); // "today" | "week"
+  const [todayReport, setTodayReport] = useState(null);
+  const [weekReport, setWeekReport] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(null); // null = whole-week view, else "yyyy-MM-dd"
+  const [dayReport, setDayReport] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Read through a ref so neither effect needs `notify` in its dependency array —
+  // it can change identity every render without re-triggering a fetch.
+  const notifyRef = useRef(notify);
   useEffect(() => {
-    reportsApi
-      .summary(range)
-      .then(setData)
-      .catch((e) => notify(msg(e, "Could not load report")))
-      .finally(() => setLoading(false));
-  }, [range, notify]);
+    notifyRef.current = notify;
+  });
 
-  const selectRange = (r) => {
+  useEffect(() => {
+    let active = true;
+    const req = view === "today" ? reportsApi.today() : reportsApi.week();
+    req
+      .then((res) => {
+        if (!active) return;
+        if (view === "today") setTodayReport(res);
+        else setWeekReport(res);
+      })
+      .catch((e) => active && notifyRef.current(msg(e, "Could not load report")))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [view]);
+
+  useEffect(() => {
+    if (!selectedDay) return;
+    let active = true;
+    reportsApi
+      .day(selectedDay)
+      .then((res) => active && setDayReport(res))
+      .catch((e) => active && notifyRef.current(msg(e, "Could not load report")))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [selectedDay]);
+
+  const selectView = (v) => {
     setLoading(true);
-    setRange(r);
+    setSelectedDay(null);
+    setView(v);
   };
+
+  const selectDay = (date) => {
+    setLoading(true);
+    setSelectedDay(date);
+  };
+
+  const displayed = view === "today" ? todayReport : selectedDay ? dayReport : weekReport?.week;
 
   return (
     <div className="max-w-5xl">
       <div className="flex items-center gap-3 mb-4">
         <h1 className="text-xl font-semibold text-zinc-50 tracking-tight">Reports</h1>
         <div className="ml-auto flex gap-2 text-sm">
-          {[["today", "Today"], ["week", "Last 7 days"]].map(([k, label]) => (
+          {[["today", "Today"], ["week", "This week"]].map(([k, label]) => (
             <button
               key={k}
-              onClick={() => selectRange(k)}
+              onClick={() => selectView(k)}
               className={`px-4 py-2 rounded-lg border font-medium transition-colors ${
-                range === k
+                view === k
                   ? "bg-emerald-500 text-zinc-950 border-emerald-500"
                   : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
               }`}
@@ -949,20 +1098,58 @@ function ReportsTab({ notify }) {
         </div>
       </div>
 
-      {loading || !data ? (
+      {view === "week" && weekReport && (
+        <div className="flex flex-wrap items-center gap-2 mb-5 text-sm">
+          <button
+            onClick={() => setSelectedDay(null)}
+            className={`px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+              !selectedDay
+                ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+                : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            Whole week · {rs(weekReport.week.totalSales)}
+          </button>
+          {weekReport.days.map((d) => (
+            <button
+              key={d.date}
+              onClick={() => selectDay(d.date)}
+              className={`px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                selectedDay === d.date
+                  ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+                  : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+              }`}
+            >
+              {dayLabel(d.date, { weekday: "short", day: "numeric" })} · {rs(d.totalSales)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {loading || !displayed ? (
         <div className="text-zinc-500 text-sm">Loading…</div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 mb-5">
+          <div className="grid grid-cols-3 gap-4 mb-2">
             <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 p-5">
-              <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">Total sales</div>
-              <div className="text-2xl font-semibold text-emerald-400 tabular-nums">{rs(data.totalSales)}</div>
+              <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">
+                {view === "today" ? "Total sales" : selectedDay ? `Total sales — ${dayLabel(selectedDay, { weekday: "long", day: "numeric", month: "short" })}` : "Total sales — this week"}
+              </div>
+              <div className="text-2xl font-semibold text-emerald-400 tabular-nums">{rs(displayed.totalSales)}</div>
             </div>
             <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 p-5">
               <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">Number of sales</div>
-              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">{data.saleCount}</div>
+              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">{displayed.saleCount}</div>
+            </div>
+            <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 p-5">
+              <div className="text-xs uppercase tracking-wide text-zinc-500 mb-1.5">Total profit</div>
+              <div className="text-2xl font-semibold text-amber-400 tabular-nums">{rs(displayed.totalProfit)}</div>
             </div>
           </div>
+
+          <p className="text-xs text-zinc-500 mb-5">
+            Profit for sales recorded before cost tracking may be overstated.
+          </p>
 
           <div className="grid grid-cols-2 gap-5">
             <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 overflow-hidden self-start">
@@ -971,17 +1158,18 @@ function ReportsTab({ notify }) {
               </div>
               <table className="w-full text-sm">
                 <tbody>
-                  {data.topItems.map((item, i) => (
-                    <tr key={item.productName} className="border-t border-zinc-800/60">
+                  {displayed.topItems.map((item, i) => (
+                    <tr key={item.productId} className="border-t border-zinc-800/60">
                       <td className="px-4 py-2 text-zinc-500 tabular-nums w-8">{i + 1}</td>
                       <td className="px-2 py-2 text-zinc-100">{item.productName}</td>
                       <td className="px-2 py-2 text-right tabular-nums text-zinc-400 w-16">{item.quantity}</td>
-                      <td className="px-4 py-2 text-right tabular-nums font-medium text-zinc-100 w-28">{rs(item.revenue)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums font-medium text-zinc-100 w-28">{rs(item.revenue)}</td>
+                      <td className="px-4 py-2 text-right tabular-nums font-medium text-amber-400 w-28">{rs(item.profit)}</td>
                     </tr>
                   ))}
-                  {data.topItems.length === 0 && (
+                  {displayed.topItems.length === 0 && (
                     <tr>
-                      <td colSpan="4" className="px-4 py-10 text-center text-zinc-600">No sales in this period</td>
+                      <td colSpan="5" className="px-4 py-10 text-center text-zinc-600">No sales in this period</td>
                     </tr>
                   )}
                 </tbody>
@@ -994,8 +1182,8 @@ function ReportsTab({ notify }) {
               </div>
               <table className="w-full text-sm">
                 <tbody>
-                  {data.cashierTotals.map((c) => (
-                    <tr key={c.cashier} className="border-t border-zinc-800/60">
+                  {displayed.cashierTotals.map((c) => (
+                    <tr key={c.userId} className="border-t border-zinc-800/60">
                       <td className="px-4 py-2 text-zinc-100">{c.cashier}</td>
                       <td className="px-2 py-2 text-right tabular-nums text-zinc-500 w-24">
                         {c.saleCount} sale{c.saleCount !== 1 ? "s" : ""}
@@ -1003,7 +1191,7 @@ function ReportsTab({ notify }) {
                       <td className="px-4 py-2 text-right tabular-nums font-medium text-zinc-100 w-28">{rs(c.total)}</td>
                     </tr>
                   ))}
-                  {data.cashierTotals.length === 0 && (
+                  {displayed.cashierTotals.length === 0 && (
                     <tr>
                       <td colSpan="3" className="px-4 py-10 text-center text-zinc-600">No sales in this period</td>
                     </tr>
@@ -1013,6 +1201,190 @@ function ReportsTab({ notify }) {
             </div>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Sales history ---------------- */
+const toIsoDate = (d) => {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+function SalesHistoryTab({ notify }) {
+  const [from, setFrom] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return toIsoDate(d);
+  });
+  const [to, setTo] = useState(() => toIsoDate(new Date()));
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // Read through a ref so neither effect needs `notify` in its dependency array.
+  const notifyRef = useRef(notify);
+  useEffect(() => {
+    notifyRef.current = notify;
+  });
+
+  useEffect(() => {
+    let active = true;
+    salesApi
+      .list({ from, to })
+      .then((res) => active && setRows(res))
+      .catch((e) => active && notifyRef.current(msg(e, "Could not load sales history")))
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [from, to]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    let active = true;
+    salesApi
+      .get(selectedId)
+      .then((res) => active && setDetail(res))
+      .catch((e) => active && notifyRef.current(msg(e, "Could not load bill")))
+      .finally(() => active && setDetailLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [selectedId]);
+
+  const changeFrom = (v) => {
+    setLoading(true);
+    setSelectedId(null);
+    setFrom(v);
+  };
+
+  const changeTo = (v) => {
+    setLoading(true);
+    setSelectedId(null);
+    setTo(v);
+  };
+
+  const selectRow = (id) => {
+    setDetailLoading(true);
+    setDetail(null);
+    setSelectedId(id);
+  };
+
+  return (
+    <div className="max-w-5xl">
+      <div className="flex items-center gap-3 mb-4">
+        <h1 className="text-xl font-semibold text-zinc-50 tracking-tight">Sales history</h1>
+        <div className="ml-auto flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-1.5 text-zinc-400">
+            From
+            <input
+              type="date"
+              value={from}
+              max={to}
+              onChange={(e) => changeFrom(e.target.value)}
+              className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+            />
+          </label>
+          <label className="flex items-center gap-1.5 text-zinc-400">
+            To
+            <input
+              type="date"
+              value={to}
+              min={from}
+              max={toIsoDate(new Date())}
+              onChange={(e) => changeTo(e.target.value)}
+              className="px-2 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+            />
+          </label>
+        </div>
+      </div>
+
+      {loading || !rows ? (
+        <div className="text-zinc-500 text-sm">Loading…</div>
+      ) : (
+        <div className="grid grid-cols-2 gap-5">
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 overflow-hidden self-start">
+            <div className="px-4 py-3 border-b border-zinc-800 font-semibold text-sm text-zinc-300">
+              Bills ({rows.length})
+            </div>
+            <table className="w-full text-sm">
+              <tbody>
+                {rows.map((s) => (
+                  <tr
+                    key={s.id}
+                    onClick={() => selectRow(s.id)}
+                    className={`border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer transition-colors ${
+                      selectedId === s.id ? "bg-emerald-500/10" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-2 text-zinc-500 tabular-nums w-14">#{s.id}</td>
+                    <td className="px-2 py-2 text-zinc-400 tabular-nums whitespace-nowrap">
+                      {new Date(s.saleTime).toLocaleString("en-LK", { dateStyle: "medium", timeStyle: "short" })}
+                    </td>
+                    <td className="px-2 py-2 text-zinc-100">{s.cashier}</td>
+                    <td className="px-2 py-2 text-right tabular-nums text-zinc-400 w-16">
+                      {s.itemCount} item{s.itemCount !== 1 ? "s" : ""}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums font-medium text-zinc-100 w-28">{rs(s.totalAmount)}</td>
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan="5" className="px-4 py-10 text-center text-zinc-600">No sales in this period</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 overflow-hidden self-start">
+            <div className="px-4 py-3 border-b border-zinc-800 font-semibold text-sm text-zinc-300">
+              {selectedId ? `Bill #${selectedId}` : "Bill detail"}
+            </div>
+            {!selectedId ? (
+              <div className="px-4 py-10 text-center text-zinc-600 text-sm">Select a bill to view its items</div>
+            ) : detailLoading || !detail ? (
+              <div className="px-4 py-10 text-center text-zinc-600 text-sm">Loading…</div>
+            ) : (
+              <div className="p-4 space-y-3">
+                <div className="flex justify-between text-xs text-zinc-500">
+                  <span>{new Date(detail.saleTime).toLocaleString("en-LK", { dateStyle: "medium", timeStyle: "short" })}</span>
+                  <span>{detail.cashier}</span>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {detail.items.map((l, i) => (
+                      <tr key={i} className="border-t border-zinc-800/60">
+                        <td className="py-1.5 text-zinc-100">{l.name}</td>
+                        <td className="py-1.5 text-right tabular-nums text-zinc-400 w-14">{l.quantity}</td>
+                        <td className="py-1.5 text-right tabular-nums text-zinc-400 w-24">{rs(l.unitPrice)}</td>
+                        <td className="py-1.5 pl-2 text-right tabular-nums font-medium text-zinc-100 w-28">{rs(l.lineTotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="border-t border-zinc-800 pt-3 space-y-1 text-sm">
+                  <div className="flex justify-between font-semibold text-zinc-100">
+                    <span>Total</span>
+                    <span className="tabular-nums">{rs(detail.totalAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-400">
+                    <span>Cash tendered</span>
+                    <span className="tabular-nums">{rs(detail.paidAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-emerald-400 font-semibold">
+                    <span>Change</span>
+                    <span className="tabular-nums">{rs(detail.changeGiven)}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
