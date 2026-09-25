@@ -62,10 +62,22 @@ export const categories = {
   remove: (id) => request(`/api/categories/${id}`, { method: "DELETE" }),
 };
 
+export const suppliers = {
+  list: () => request("/api/suppliers"),
+  create: (name) => request("/api/suppliers", { method: "POST", body: { name } }),
+  remove: (id) => request(`/api/suppliers/${id}`, { method: "DELETE" }),
+};
+
 export const sales = {
   checkout: (body) => request("/api/sales", { method: "POST", body }),
   get: (id) => request(`/api/sales/${id}`),
   list: ({ from, to }) => request("/api/sales", { params: { from, to } }), // from/to = "yyyy-MM-dd"
+};
+
+export const discounts = {
+  list: () => request("/api/discounts"),
+  create: (body) => request("/api/discounts", { method: "POST", body }),
+  setActive: (id, value) => request(`/api/discounts/${id}/active`, { method: "PATCH", params: { value } }),
 };
 
 export const stock = {

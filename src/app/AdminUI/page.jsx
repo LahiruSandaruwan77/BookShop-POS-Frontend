@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { products as productsApi, categories as categoriesApi, stock as stockApi, users as usersApi, reports as reportsApi, sales as salesApi, ApiError } from "../../lib/api";
+import { products as productsApi, categories as categoriesApi, suppliers as suppliersApi, stock as stockApi, users as usersApi, reports as reportsApi, sales as salesApi, discounts as discountsApi, ApiError } from "../../lib/api";
 import { useAuth } from "../../lib/auth-context";
 
 const rs = (n) => "Rs. " + Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2 });
@@ -8,7 +8,7 @@ const rs = (n) => "Rs. " + Number(n || 0).toLocaleString("en-LK", { minimumFract
 const msg = (err, fallback) => (err instanceof ApiError ? err.message : fallback);
 
 const EMPTY_FORM = {
-  id: null, barcode: "", name: "", categoryId: "",
+  id: null, barcode: "", name: "", categoryId: "", supplierId: "",
   costPrice: "", sellingPrice: "", openingStock: "", service: false,
   openPrice: false, marginPercent: "",
 };
@@ -18,6 +18,7 @@ export default function AdminScreen() {
   const [tab, setTab] = useState("products");
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
 
@@ -34,20 +35,26 @@ export default function AdminScreen() {
     () => categoriesApi.list().then(setCategories).catch((e) => notify(msg(e, "Could not load categories"))),
     []
   );
+  const reloadSuppliers = useCallback(
+    () => suppliersApi.list().then(setSuppliers).catch((e) => notify(msg(e, "Could not load suppliers"))),
+    []
+  );
 
   useEffect(() => {
-    Promise.all([reloadProducts(), reloadCategories()]).finally(() => setLoading(false));
-  }, [reloadProducts, reloadCategories]);
+    Promise.all([reloadProducts(), reloadCategories(), reloadSuppliers()]).finally(() => setLoading(false));
+  }, [reloadProducts, reloadCategories, reloadSuppliers]);
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
       <header className="bg-zinc-900 border-b border-zinc-800 px-5 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-sm">
-            SB
-          </div>
+          <img
+            src="/abc-bookshop-icon.jpeg"
+            alt="ABC Book Shop & Communication"
+            className="h-8 w-8 rounded-lg border border-zinc-800 object-cover"
+          />
           <div className="flex items-baseline gap-2">
-            <span className="text-base font-semibold text-zinc-50 tracking-tight">Sarasavi Book Corner</span>
+            <span className="text-base font-semibold text-zinc-50 tracking-tight">ABC Book Shop &amp; Communication</span>
             <span className="text-xs text-zinc-500 uppercase tracking-widest">Back office</span>
           </div>
         </div>
@@ -64,8 +71,9 @@ export default function AdminScreen() {
           {[
             ["products", "Products"],
             ["stock", "Receive stock"],
-            ["categories", "Categories"],
+            ["categories", "Categories & Suppliers"],
             ["users", "Users"],
+            ["discounts", "Discounts"],
             ["reports", "Reports"],
             ["history", "Sales history"],
           ].map(([key, label]) => (
@@ -92,6 +100,7 @@ export default function AdminScreen() {
                 <ProductsTab
                   products={products}
                   categories={categories}
+                  suppliers={suppliers}
                   reloadProducts={reloadProducts}
                   notify={notify}
                 />
@@ -100,9 +109,17 @@ export default function AdminScreen() {
                 <StockTab products={products} reloadProducts={reloadProducts} notify={notify} />
               )}
               {tab === "categories" && (
-                <CategoriesTab categories={categories} reloadCategories={reloadCategories} products={products} notify={notify} />
+                <CategoriesTab
+                  categories={categories}
+                  reloadCategories={reloadCategories}
+                  suppliers={suppliers}
+                  reloadSuppliers={reloadSuppliers}
+                  products={products}
+                  notify={notify}
+                />
               )}
               {tab === "users" && <UsersTab notify={notify} currentUsername={user?.username} />}
+              {tab === "discounts" && <DiscountsTab products={products} notify={notify} />}
               {tab === "reports" && <ReportsTab notify={notify} />}
               {tab === "history" && <SalesHistoryTab notify={notify} />}
             </>
@@ -119,18 +136,18 @@ export default function AdminScreen() {
   );
 }
 
-/* ---------------- Products ---------------- */
-function ProductsTab({ products, categories, reloadProducts, notify }) {
+// Product Tab
+function ProductsTab({ products, categories, suppliers, reloadProducts, notify }) {
   const [search, setSearch] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [supplierFilter, setSupplierFilter] = useState("all");
   const [form, setForm] = useState(null); // null = closed, object = editing/adding
   const [saving, setSaving] = useState(false);
   const barcodeRef = useRef(null);
 
   useEffect(() => {
     if (form) barcodeRef.current?.focus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refocus only when a different record opens, not on every keystroke
   }, [form?.id]);
 
   const visible = products.filter(
@@ -138,7 +155,8 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
       (showInactive || p.active) &&
       (p.name.toLowerCase().includes(search.toLowerCase()) ||
         (p.barcode || "").includes(search)) &&
-      (categoryFilter === "all" || p.category === categoryFilter)
+      (categoryFilter === "all" || p.category === categoryFilter) &&
+      (supplierFilter === "all" || p.supplierName === supplierFilter)
   );
 
   const openAdd = () => setForm({ ...EMPTY_FORM, categoryId: categories[0]?.id ?? "" });
@@ -148,6 +166,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
       barcode: p.barcode || "",
       name: p.name,
       categoryId: categories.find((c) => c.name === p.category)?.id ?? "",
+      supplierId: p.supplierId ?? "",
       costPrice: p.costPrice,
       sellingPrice: p.sellingPrice,
       openingStock: "",
@@ -171,6 +190,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
       barcode: noStock ? null : form.barcode.trim() || null,
       name: form.name.trim(),
       categoryId: Number(form.categoryId),
+      supplierId: form.supplierId ? Number(form.supplierId) : null,
       costPrice: form.openPrice ? 0 : (form.costPrice === "" ? 0 : Number(form.costPrice)),
       sellingPrice: form.openPrice ? null : Number(form.sellingPrice),
       openingStock: noStock || form.id ? null : (form.openingStock === "" ? 0 : Number(form.openingStock)),
@@ -239,6 +259,35 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
         </span>
       </div>
 
+      {suppliers.length > 0 && (
+        <div className="flex items-center gap-2 mb-3 text-sm flex-wrap">
+          <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">Supplier</span>
+          <button
+            onClick={() => setSupplierFilter("all")}
+            className={`px-4 py-2 rounded-lg border font-medium transition-colors ${
+              supplierFilter === "all"
+                ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+                : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+            }`}
+          >
+            All
+          </button>
+          {suppliers.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => setSupplierFilter(s.name)}
+              className={`px-4 py-2 rounded-lg border font-medium transition-colors ${
+                supplierFilter === s.name
+                  ? "bg-emerald-500 text-zinc-950 border-emerald-500"
+                  : "bg-zinc-800/40 border-zinc-700 text-zinc-400 hover:bg-zinc-800"
+              }`}
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center gap-3 mb-4">
         <h1 className="text-xl font-semibold text-zinc-50 tracking-tight">Products</h1>
         <input
@@ -271,6 +320,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
               <th className="text-left px-4 py-2.5 font-medium border-b border-zinc-800">Item</th>
               <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Barcode</th>
               <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Category</th>
+              <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Supplier</th>
               <th className="text-right px-2 py-2.5 font-medium border-b border-zinc-800">Cost</th>
               <th className="text-right px-2 py-2.5 font-medium border-b border-zinc-800">Price</th>
               <th className="text-right px-2 py-2.5 font-medium border-b border-zinc-800">Stock</th>
@@ -295,6 +345,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
                 </td>
                 <td className="px-2 py-2.5 tabular-nums text-zinc-500">{p.barcode || "—"}</td>
                 <td className="px-2 py-2.5 text-zinc-400">{p.category}</td>
+                <td className="px-2 py-2.5 text-zinc-500">{p.supplierName || "—"}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums text-zinc-500">
                   {p.service || p.openPrice ? "—" : rs(p.costPrice)}
                 </td>
@@ -329,7 +380,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
             ))}
             {visible.length === 0 && (
               <tr>
-                <td colSpan="7" className="px-4 py-10 text-center text-zinc-600">
+                <td colSpan="8" className="px-4 py-10 text-center text-zinc-600">
                   No products match — add one to get started
                 </td>
               </tr>
@@ -387,18 +438,33 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
               />
             </Field>
 
-            <Field label="Category *">
-              <select
-                value={form.categoryId}
-                onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
-                className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
-              >
-                <option value="" disabled>Choose…</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Category *">
+                <select
+                  value={form.categoryId}
+                  onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+                >
+                  <option value="" disabled>Choose…</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Supplier">
+                <select
+                  value={form.supplierId}
+                  onChange={(e) => setForm({ ...form, supplierId: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+                >
+                  <option value="">— none —</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               {!form.service && !form.openPrice && (
@@ -474,7 +540,7 @@ function ProductsTab({ products, categories, reloadProducts, notify }) {
   );
 }
 
-/* ---------------- Receive stock ---------------- */
+//Receive stock 
 function StockTab({ products, reloadProducts, notify }) {
   const [movements, setMovements] = useState([]);
   const [query, setQuery] = useState("");
@@ -661,8 +727,20 @@ function StockTab({ products, reloadProducts, notify }) {
   );
 }
 
-/* ---------------- Categories ---------------- */
-function CategoriesTab({ categories, reloadCategories, products, notify }) {
+
+function CategoriesTab({ categories, reloadCategories, suppliers, reloadSuppliers, products, notify }) {
+  return (
+    <div className="max-w-4xl">
+      <h1 className="text-xl font-semibold text-zinc-50 tracking-tight mb-4">Categories &amp; Suppliers</h1>
+      <div className="grid grid-cols-2 gap-8">
+        <CategoryList categories={categories} reloadCategories={reloadCategories} products={products} notify={notify} />
+        <SupplierList suppliers={suppliers} reloadSuppliers={reloadSuppliers} products={products} notify={notify} />
+      </div>
+    </div>
+  );
+}
+
+function CategoryList({ categories, reloadCategories, products, notify }) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
@@ -698,8 +776,8 @@ function CategoriesTab({ categories, reloadCategories, products, notify }) {
   };
 
   return (
-    <div className="max-w-md">
-      <h1 className="text-xl font-semibold text-zinc-50 tracking-tight mb-4">Categories</h1>
+    <div>
+      <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wide mb-3">Categories</h2>
       <div className="flex gap-2 mb-4">
         <input
           value={name}
@@ -743,7 +821,93 @@ function CategoriesTab({ categories, reloadCategories, products, notify }) {
   );
 }
 
-/* ---------------- Users ---------------- */
+//Supplier List Tab
+function SupplierList({ suppliers, reloadSuppliers, products, notify }) {
+  const [name, setName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const add = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setSaving(true);
+    try {
+      await suppliersApi.create(n);
+      setName("");
+      notify(`Added supplier: ${n}`);
+      reloadSuppliers();
+    } catch (err) {
+      notify(msg(err, "Could not add supplier"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (s) => {
+    const count = products.filter((p) => p.supplierName === s.name).length;
+    const question =
+      count > 0
+        ? `Delete supplier "${s.name}"? It will be removed from ${count} product${count !== 1 ? "s" : ""}. This can't be undone.`
+        : `Delete supplier "${s.name}"? This can't be undone.`;
+    if (!window.confirm(question)) return;
+    setDeletingId(s.id);
+    try {
+      await suppliersApi.remove(s.id);
+      notify(`Deleted supplier: ${s.name}`);
+      reloadSuppliers();
+    } catch (err) {
+      notify(msg(err, "Could not delete supplier"));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wide mb-3">Suppliers</h2>
+      <div className="flex gap-2 mb-4">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          placeholder="New supplier name"
+          className="flex-1 px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none transition-colors"
+        />
+        <button onClick={add} disabled={saving} className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold transition-colors disabled:opacity-50">
+          Add
+        </button>
+      </div>
+      <ul className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 divide-y divide-zinc-800/60">
+        {suppliers.map((s) => {
+          const count = products.filter((p) => p.supplierName === s.name).length;
+          return (
+            <li key={s.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
+              <span className="text-zinc-100">{s.name}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-500">{count} item{count !== 1 ? "s" : ""}</span>
+                <button
+                  onClick={() => remove(s)}
+                  disabled={deletingId === s.id}
+                  className="text-zinc-500 hover:text-red-400 hover:underline transition-colors disabled:opacity-30 disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  {deletingId === s.id ? "Deleting…" : "Delete"}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+        {suppliers.length === 0 && (
+          <li className="px-4 py-6 text-center text-zinc-600 text-sm">No suppliers yet</li>
+        )}
+      </ul>
+      <p className="text-xs text-zinc-600 mt-3">
+        Supplier is optional — deleting one just clears it from any products that had it.
+      </p>
+    </div>
+  );
+}
+
+// Users
 function UsersTab({ notify, currentUsername }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1016,7 +1180,7 @@ function UsersTab({ notify, currentUsername }) {
   );
 }
 
-/* ---------------- Reports ---------------- */
+//Reports
 const dayLabel = (isoDate, opts) =>
   new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-LK", opts);
 
@@ -1206,7 +1370,7 @@ function ReportsTab({ notify }) {
   );
 }
 
-/* ---------------- Sales history ---------------- */
+//Sales history
 const toIsoDate = (d) => {
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -1384,6 +1548,258 @@ function SalesHistoryTab({ notify }) {
               </div>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+//Discounts
+const EMPTY_DISCOUNT_FORM = {
+  productId: "",
+  type: "PERCENT",
+  amount: "",
+  startDate: toIsoDate(new Date()),
+  endDate: toIsoDate(new Date()),
+};
+
+function DiscountsTab({ products, notify }) {
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [togglingId, setTogglingId] = useState(null);
+  const [form, setForm] = useState(EMPTY_DISCOUNT_FORM);
+  const [productQuery, setProductQuery] = useState("");
+
+  // The backend rejects services and open-price items outright — filter them
+  // out of the picker so the admin can't even try.
+  const normalProducts = products.filter((p) => p.active && !p.service && !p.openPrice);
+
+  // Suggestions only exist while nothing is selected yet — the moment a product
+  // is picked, form.productId is set and this goes empty, hiding the dropdown.
+  // Any edit to the text clears form.productId (see the input's onChange), so
+  // a submit can never carry a product id that doesn't match what's shown here.
+  const productHits =
+    !form.productId && productQuery.trim()
+      ? normalProducts.filter((p) => p.name.toLowerCase().includes(productQuery.trim().toLowerCase())).slice(0, 8)
+      : [];
+
+  const selectProduct = (p) => {
+    setForm({ ...form, productId: p.id });
+    setProductQuery(p.name);
+  };
+
+  const reload = useCallback(
+    () => discountsApi.list().then(setRows).catch((e) => notify(msg(e, "Could not load discounts"))).finally(() => setLoading(false)),
+    [notify]
+  );
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const create = async () => {
+    if (!form.productId) return notify("Choose a product");
+    if (form.amount === "" || Number(form.amount) <= 0) return notify("Enter a discount value");
+    if (!form.endDate || form.endDate <= form.startDate) return notify("End date must be after start date");
+
+    setSaving(true);
+    try {
+      await discountsApi.create({
+        productId: Number(form.productId),
+        type: form.type,
+        amount: Number(form.amount),
+        startDate: form.startDate,
+        endDate: form.endDate,
+      });
+      notify("Discount scheduled");
+      setForm({ ...EMPTY_DISCOUNT_FORM, startDate: form.startDate, endDate: form.endDate });
+      setProductQuery("");
+      reload();
+    } catch (err) {
+      // Backend validation (overlap 409, out-of-range value, wrong product
+      // type) all arrive as a real message here via ApiError — surfaced as-is.
+      notify(msg(err, "Could not create discount"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = async (d) => {
+    setTogglingId(d.id);
+    try {
+      await discountsApi.setActive(d.id, !d.active);
+      notify(d.active ? `Turned off: ${d.productName}` : `Turned on: ${d.productName}`);
+      reload();
+    } catch (err) {
+      notify(msg(err, "Could not update discount"));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // Active first, then upcoming, then expired — each group newest-start first.
+  const statusRank = { active: 0, upcoming: 1, expired: 2 };
+  const sorted = rows
+    ? [...rows].sort(
+        (a, b) => statusRank[a.status] - statusRank[b.status] || b.startDate.localeCompare(a.startDate)
+      )
+    : [];
+
+  return (
+    <div className="max-w-5xl">
+      <h1 className="text-xl font-semibold text-zinc-50 tracking-tight mb-4">Discounts</h1>
+
+      <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 p-5 mb-5">
+        <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wide mb-3">Schedule a discount</h2>
+        <div className="grid grid-cols-5 gap-3">
+          <Field label="Product *">
+            <div className="relative">
+              <input
+                value={productQuery}
+                onChange={(e) => {
+                  // Any edit invalidates the previous pick — productId only
+                  // ever gets set again by an explicit select below.
+                  setProductQuery(e.target.value);
+                  if (form.productId) setForm({ ...form, productId: "" });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || productHits.length === 0) return;
+                  selectProduct(productHits[0]);
+                }}
+                placeholder="Search product name…"
+                className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none transition-colors"
+              />
+              {productHits.length > 0 && (
+                <ul className="absolute z-10 left-0 right-0 mt-1 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl shadow-black/40 overflow-hidden">
+                  {productHits.map((p, i) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectProduct(p)}
+                        className={`w-full flex justify-between px-3 py-2 text-left text-sm text-zinc-100 hover:bg-zinc-800 transition-colors ${
+                          i === 0 ? "bg-zinc-800/60" : ""
+                        }`}
+                      >
+                        <span>{p.name}</span>
+                        {i === 0 && <span className="text-xs text-zinc-500">↵ Enter</span>}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Field>
+          <Field label="Type">
+            <select
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+            >
+              <option value="PERCENT">Percent off</option>
+              <option value="FIXED">Fixed amount off</option>
+            </select>
+          </Field>
+          <Field label={form.type === "PERCENT" ? "Percent *" : "Rs. off *"}>
+            <input
+              type="number" min="0" step="0.01"
+              value={form.amount}
+              onChange={(e) => setForm({ ...form, amount: e.target.value })}
+              placeholder={form.type === "PERCENT" ? "e.g. 10" : "e.g. 50"}
+              className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 placeholder-zinc-600 focus:border-emerald-500 focus:outline-none tabular-nums transition-colors"
+            />
+          </Field>
+          <Field label="From *">
+            <input
+              type="date"
+              value={form.startDate}
+              onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+            />
+          </Field>
+          <Field label="Until *">
+            <input
+              type="date"
+              value={form.endDate}
+              min={form.startDate}
+              onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg bg-zinc-800/60 border border-zinc-700 text-zinc-100 focus:border-emerald-500 focus:outline-none transition-colors"
+            />
+          </Field>
+        </div>
+        <div className="flex items-center justify-between mt-4">
+          <p className="text-xs text-zinc-600">
+            Only normal products can have a discount — services and open-price items aren't listed here.
+          </p>
+          <button
+            onClick={create}
+            disabled={saving}
+            className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-semibold transition-colors disabled:opacity-50 shrink-0 ml-4"
+          >
+            {saving ? "Scheduling…" : "Schedule discount"}
+          </button>
+        </div>
+      </div>
+
+      {loading || !rows ? (
+        <div className="text-zinc-500 text-sm">Loading…</div>
+      ) : (
+        <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-lg shadow-black/20 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-zinc-900/60 text-zinc-500 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-4 py-2.5 font-medium border-b border-zinc-800">Product</th>
+                <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Discount</th>
+                <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Dates</th>
+                <th className="text-left px-2 py-2.5 font-medium border-b border-zinc-800">Status</th>
+                <th className="px-4 py-2.5 w-28 border-b border-zinc-800" />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((d) => (
+                <tr
+                  key={d.id}
+                  className={`border-t border-zinc-800/60 hover:bg-zinc-800/20 transition-colors ${!d.active ? "opacity-40" : ""}`}
+                >
+                  <td className="px-4 py-2.5 text-zinc-100">{d.productName}</td>
+                  <td className="px-2 py-2.5 tabular-nums text-zinc-100 font-medium">
+                    {d.type === "PERCENT" ? `${d.amount}%` : rs(d.amount)}
+                  </td>
+                  <td className="px-2 py-2.5 text-zinc-400 tabular-nums whitespace-nowrap">
+                    {d.startDate} → {d.endDate}
+                  </td>
+                  <td className="px-2 py-2.5">
+                    <span
+                      className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold border ${
+                        d.status === "active"
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                          : d.status === "upcoming"
+                          ? "bg-sky-500/10 text-sky-400 border-sky-500/30"
+                          : "bg-zinc-800 text-zinc-500 border-zinc-700"
+                      }`}
+                    >
+                      {d.status}
+                    </span>
+                    {!d.active && <span className="ml-2 text-[10px] text-zinc-600">off</span>}
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      onClick={() => toggle(d)}
+                      disabled={togglingId === d.id}
+                      className="text-zinc-500 hover:text-red-400 hover:underline transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      {togglingId === d.id ? "…" : d.active ? "Turn off" : "Turn on"}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {sorted.length === 0 && (
+                <tr>
+                  <td colSpan="5" className="px-4 py-10 text-center text-zinc-600">No discounts scheduled yet</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
