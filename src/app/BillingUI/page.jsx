@@ -6,17 +6,14 @@ import { useAuth } from "../../lib/auth-context";
 const rs = (n) =>
   "Rs. " + Number(n || 0).toLocaleString("en-LK", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Printed on every receipt — edit here, nothing else to touch.
+//Recipt Details
 const SHOP = {
-  name: "SARASAVI BOOK CORNER",
+  name: "ABC BOOK SHOP & COMMUNICATION",
   address: "Kandy",
-  phone: "081-2223550",
+  phone: "076 915 1531",
 };
 
-// Print CSS lives here rather than in a shared stylesheet since only this
-// screen prints. The narrow width/monospace font are deliberate: this is the
-// same layout an 80mm thermal roll will get later, just rendered by the
-// browser today instead of ESC/POS commands.
+// Print CSS lives here rather than in a shared stylesheet since only this screen prints (AI Generated)
 const PRINT_STYLES = `
   .receipt-print { display: none; }
 
@@ -54,6 +51,7 @@ const PRINT_STYLES = `
   .receipt-print .divider { border-top: 1px dashed #000; margin: 6px 0; }
   .receipt-print .row { display: flex; justify-content: space-between; gap: 8px; }
   .receipt-print .item-name { margin-bottom: 1px; }
+  .receipt-print .was { text-decoration: line-through; opacity: 0.55; }
   .receipt-print .footer { margin-top: 10px; }
 `;
 
@@ -70,7 +68,6 @@ const mapProduct = (p) => ({
 
 // Open-price lines carry their own enteredPrice; everything else uses the
 // catalog price. Falls back to product.price for saleDone's server-resolved
-// lines too, since those never carry isOpenPrice — the server already priced them.
 const linePrice = (l) => (l.product.isOpenPrice ? l.enteredPrice : l.product.price);
 
 export default function BillingScreen() {
@@ -87,7 +84,7 @@ export default function BillingScreen() {
   const [priceInput, setPriceInput] = useState("");
   const scanRef = useRef(null);
   const priceInputRef = useRef(null);
-  const nextLineId = useRef(1); // cart lines need their own identity — see addToCart
+  const nextLineId = useRef(1); // cart lines need their own identity 
 
   const notify = (type, text) => {
     setFlash({ type, text });
@@ -186,6 +183,7 @@ export default function BillingScreen() {
       : [];
 
   const services = catalog.filter((p) => p.isService);
+  const openPriceItems = catalog.filter((p) => p.isOpenPrice);
   const total = cart.reduce((s, l) => s + linePrice(l) * l.qty, 0);
   const paid = parseFloat(tendered) || 0;
   const change = paid - total;
@@ -198,9 +196,7 @@ export default function BillingScreen() {
         items: cart.map((l) => ({
           productId: l.product.id,
           quantity: l.qty,
-          // Only open-price lines send a price — normal/service lines never do,
-          // the server always prices those from the product record itself.
-          ...(l.product.isOpenPrice ? { unitPrice: l.enteredPrice } : {}),
+          ...(l.product.isOpenPrice ? { unitPrice: l.enteredPrice } : {}),// Only open-price lines send a price — normal/service lines never do,
         })),
         paidAmount: paid,
         paymentMethod: "CASH",
@@ -212,6 +208,8 @@ export default function BillingScreen() {
           lineId: i,
           product: { id: i, name: line.name, price: Number(line.unitPrice) },
           qty: Number(line.quantity),
+          originalPrice: Number(line.originalUnitPrice),
+          discountAmount: Number(line.discountAmount),
         })),
         total: Number(res.totalAmount),
         paid: Number(res.paidAmount),
@@ -233,8 +231,7 @@ export default function BillingScreen() {
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100">
       <style>{PRINT_STYLES}</style>
 
-      {/* Print-only receipt for the completed sale — invisible on screen, and the
-          only thing `body * { visibility: hidden }` leaves visible when printing. */}
+      {/* Print-only receipt for the completed sale */}
       {saleDone && (
         <div className="receipt-print">
           <div className="center shop-name">{SHOP.name}</div>
@@ -247,8 +244,17 @@ export default function BillingScreen() {
 
           <div className="divider" />
           {saleDone.lines.map((l) => (
-            <div key={l.product.id} className="item-name">
-              <div>{l.product.name}</div>
+            <div key={l.lineId} className="item-name">
+              <div>
+                {l.product.name}
+                {l.discountAmount > 0 && ` (${rs(l.discountAmount * l.qty)} off)`}
+              </div>
+              {l.discountAmount > 0 && (
+                <div className="row was">
+                  <span>{l.qty} x {l.originalPrice.toFixed(2)}</span>
+                  <span>{(l.originalPrice * l.qty).toFixed(2)}</span>
+                </div>
+              )}
               <div className="row">
                 <span>{l.qty} x {l.product.price.toFixed(2)}</span>
                 <span>{(l.product.price * l.qty).toFixed(2)}</span>
@@ -278,11 +284,13 @@ export default function BillingScreen() {
       {/* Header */}
       <header className="bg-zinc-900 border-b border-zinc-800 px-5 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-sm">
-            SB
-          </div>
+          <img
+            src="/abc-bookshop-icon.jpeg"
+            alt="ABC Book Shop & Communication"
+            className="h-8 w-8 rounded-lg border border-zinc-800 object-cover"
+          />
           <div className="flex items-baseline gap-2">
-            <span className="text-base font-semibold text-zinc-50 tracking-tight">Sarasavi Book Corner</span>
+            <span className="text-base font-semibold text-zinc-50 tracking-tight">ABC Book Shop &amp; Communication</span>
             <span className="text-xs text-zinc-500 uppercase tracking-widest">Billing</span>
           </div>
         </div>
@@ -301,7 +309,7 @@ export default function BillingScreen() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {/* ---------- Left: scan, services, cart ---------- */}
+        {/*  Left: scan, services, cart  */}
         <main className="flex-1 flex flex-col p-4 gap-3 min-w-0">
           {/* Scan / search */}
           <div className="relative">
@@ -365,6 +373,27 @@ export default function BillingScreen() {
                   </div>
                   <div className="text-xs text-amber-500/70 tabular-nums">
                     {rs(s.price)} / {s.name.includes("sheet") ? "sheet" : "page"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Loose item quick keys — no barcode either, but no fixed price:
+              tapping one opens the same price prompt a search-hit click does. */}
+          {openPriceItems.length > 0 && (
+            <div className="grid grid-cols-4 gap-2">
+              {openPriceItems.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  className="rounded-xl border border-sky-500/25 bg-sky-500/10 hover:bg-sky-500/15 px-3 py-2 text-left transition-colors"
+                >
+                  <div className="text-sm font-semibold text-sky-400 leading-tight">
+                    {p.name}
+                  </div>
+                  <div className="text-xs text-sky-500/70">
+                    tap to set price
                   </div>
                 </button>
               ))}
@@ -461,12 +490,24 @@ export default function BillingScreen() {
             <div className="flex-1 overflow-auto px-5 py-3 space-y-1">
               {(saleDone ? saleDone.lines : cart).map((l) => (
                 <div key={l.lineId} className="flex justify-between gap-2">
-                  <span className="truncate">
-                    {l.qty > 1 ? `${l.qty} × ` : ""}
-                    {l.product.name}
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="truncate">
+                      {l.qty > 1 ? `${l.qty} × ` : ""}
+                      {l.product.name}
+                    </span>
+                    {l.discountAmount > 0 && (
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide bg-emerald-100 text-emerald-700 border border-emerald-300 px-1 py-0.5 rounded">
+                        {rs(l.discountAmount * l.qty)} off
+                      </span>
+                    )}
                   </span>
-                  <span className="tabular-nums shrink-0">
-                    {(linePrice(l) * l.qty).toFixed(2)}
+                  <span className="tabular-nums shrink-0 flex flex-col items-end">
+                    {l.discountAmount > 0 && (
+                      <span className="line-through text-neutral-400 text-xs">
+                        {(l.originalPrice * l.qty).toFixed(2)}
+                      </span>
+                    )}
+                    <span>{(linePrice(l) * l.qty).toFixed(2)}</span>
                   </span>
                 </div>
               ))}
@@ -546,9 +587,8 @@ export default function BillingScreen() {
         </aside>
       </div>
 
-      {/* Open-price prompt: no fixed price to add at, so ask for one before the
-          item goes into the cart. Enter confirms, Escape cancels — this has to
-          be fast, it's a live counter interaction. */}
+      {// Open-price prompt: no fixed price to add at, so ask for one before the item goes into the cart 
+      }
       {pendingOpenPrice && (
         <div
           className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-30"

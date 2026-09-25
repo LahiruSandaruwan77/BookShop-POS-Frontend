@@ -32,10 +32,12 @@ export default function LoginScreen() {
         className="relative w-full max-w-sm bg-zinc-900 rounded-2xl shadow-2xl shadow-black/50 border border-zinc-800 p-8 space-y-6"
       >
         <div className="text-center space-y-1">
-          <div className="mx-auto mb-3 h-11 w-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-lg">
-            SB
-          </div>
-          <div className="text-lg font-semibold text-zinc-50 tracking-tight">Sarasavi Book Corner</div>
+          <img
+            src="/abc-bookshop-icon.jpeg"
+            alt="ABC Book Shop & Communication"
+            className="mx-auto mb-3 h-11 w-11 rounded-xl border border-zinc-800 object-cover"
+          />
+          <div className="text-lg font-semibold text-zinc-50 tracking-tight">ABC Book Shop &amp; Communication</div>
           <div className="text-xs text-zinc-500 uppercase tracking-widest">Point of sale</div>
         </div>
 
